@@ -1,0 +1,288 @@
+<html>
+<head>
+<style>
+html, body, #canvasDiv {
+	width: 100%;
+	height: 100%;
+	padding: 0;
+	margin: 0;
+}
+</style>
+<script>
+var id = 0, width = 0, height = 0;
+var ctx = null, rgba = false, animations = null, ellipses = null;
+var sky = null, earth = null, ellipse = null;
+var sendSocket = null, receiveSocket = null;
+var lastKeyUp = 0, timeoutId = 0, repeat = 1000;
+var inhaling = false, breathStart = 0, breath = 6000;
+
+function debug(message) {
+	var console = document.getElementById('console');
+	console.innerHTML = message;
+}
+
+function init() {
+	id = String(Math.floor(Math.random() * 1000 * 1000));
+	var canvasDiv = document.getElementById('canvasDiv');
+	var canvas = document.getElementById('canvas');
+	width = canvas.width = canvasDiv.offsetWidth;
+	height = canvas.height = canvasDiv.offsetHeight;
+	ctx = canvas.getContext('2d');
+	var colour = 'rgba(0, 0, 0, 0.5)';
+	var element = document.createElement('p');
+	try {
+		element.style.color = colour;
+		rgba = /^rgba/.test(element.style.color);
+	} catch(e) {}
+	animations = new Object();
+	ellipses = new Object();
+	sky = {cx: width / 2, cy: -30, rx: 20, ry: 20, a: 0.5};
+	earth = {cx: width / 2, cy: height, rx: width / 4, ry: 0, a: 0};
+
+	var text = new Object();
+	text.text = ['Conspiracy means "breathing together".',
+		'To join the conspiracy, hold down a key as you',
+		'breathe in and release it as you breathe out.'];
+	text.draw = drawText;
+	text.start = {a: 1};
+	text.end = {a: 0};
+	var time = new Date().getTime();
+	animations.text = {drawable: text, start: time, end: time + 5000};
+
+	ellipse = new Object();
+	ellipse.r = 255;
+	ellipse.g = 200;
+	ellipse.b = 50;
+	ellipse.draw = drawEllipse;
+
+	if(typeof XMLHttpRequest != 'undefined') {
+		sendSocket = new XMLHttpRequest();
+		receiveSocket = new XMLHttpRequest();
+		receiveSocket.onreadystatechange = function() {
+			if(receiveSocket.readyState == 4) {
+				handleResponse(receiveSocket.responseXML);
+				poll();
+			}
+		};
+		poll();
+	}
+
+	setInterval('draw()', 30);
+}
+
+function drawText(progress) {
+	if(!ctx.fillText) return;
+	var now = interpolate(this.start, this.end, progress);
+	ctx.fillStyle = makeRgba(0, 0, 0, now.a);
+	ctx.font = '18px sans-serif';
+	ctx.textAlign = 'center';
+	var x = width / 2, y = height / 2;
+	for(var i = 0; i < this.text.length; i++) {
+		ctx.fillText(this.text[i], x, y);
+		y += 28;
+	}
+}
+
+function interpolate(a, b, progress) {
+	if(progress <= 0) return a;
+	if(progress >= 1) return b;
+	var c = new Object();
+	for(var i in a) c[i] = a[i] + (b[i] - a[i]) * progress;
+	return c;
+}
+
+function drawEllipse(progress) {
+	var now = interpolate(this.start, this.end, progress);
+	var aX = now.cx - now.rx;
+	var aY = now.cy - now.ry;
+	var hB = now.rx * 0.5522848;
+	var vB = now.ry * 0.5522848;
+	var eX = aX + now.rx * 2;
+	var eY = aY + now.ry * 2;
+	var mX = aX + now.rx;
+	var mY = aY + now.ry;
+	var centreColour = makeRgba(this.r, this.g, this.b, now.a);
+	if(ctx.createRadialGradient) {
+		var edgeColour = makeRgba(this.r, this.g, this.b, 0);
+		var g = ctx.createRadialGradient(now.cx, now.cy, 0,
+			now.cx, now.cy, now.rx);
+		g.addColorStop(0, centreColour);
+		g.addColorStop(1, edgeColour);
+		ctx.fillStyle = g;
+	} else {
+		ctx.fillStyle = centreColour;
+	}
+	ctx.beginPath();
+	ctx.moveTo(aX, mY);
+	ctx.bezierCurveTo(aX, mY - vB, mX - hB, aY, mX, aY);
+	ctx.bezierCurveTo(mX + hB, aY, eX, mY - vB, eX, mY);
+	ctx.bezierCurveTo(eX, mY + vB, mX + hB, eY, mX, eY);
+	ctx.bezierCurveTo(mX - hB, eY, aX, mY + vB, aX, mY);
+	ctx.closePath();
+	ctx.fill();
+}
+
+function makeRgba(r, g, b, a) {
+	if(rgba) return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')';
+	var white = 1 - a;
+	r = Math.floor(r + (255 - r) * white);
+	g = Math.floor(g + (255 - g) * white);
+	b = Math.floor(b + (255 - b) * white);
+	return 'rgb(' + r + ', ' + g + ', ' + b + ')';
+}
+
+function handleResponse(xml) {
+	if(!xml) return;
+	var i = getFirstTag(xml, 'id');
+	var y = getFirstTag(xml, 'y');
+	var b = getFirstTag(xml, 'b');
+	var inhale = getFirstTag(xml, 'in');
+	if(i == null || y == null || b == null || inhale == null) return;
+	i = String(i);
+	y = Number(y); 
+	b = Number(b);
+	inhale = inhale == 'true';
+	if(i == id) return;
+	var now = interpolate(earth, sky, y);
+	var e = ellipses[i];
+	if(!e) {
+		e = new Object();
+		e.r = 255;
+		e.g = 190;
+		e.b = 190;
+		e.draw = drawEllipse;
+		ellipses[i] = e;
+	}
+	e.start = now;
+	var time = new Date().getTime();
+	if(inhale) rise(e, i, b, time);
+	else fall(e, i, b, time);
+}
+
+function getFirstTag(xml, tagName) {
+	var x = xml.getElementsByTagName(tagName);
+	if(!x) return null;
+	x = x[0];
+	if(!x) return null;
+	x = x.childNodes;
+	if(!x) return null;
+	x = x[0];
+	if(!x) return null;
+	return x.nodeValue;
+}
+
+function rise(e, i, b, time) {
+	e.end = sky;
+	animations[i] = {drawable: e, start: time, end: time + b};
+}
+
+function fall(e, i, b, time) {
+	e.end = earth;
+	animations[i] = {drawable: e, start: time, end: time + b};
+}
+
+function draw() {
+	if(!ctx) return;
+	var time = new Date().getTime();
+	var anyToDraw = false;
+	for(var i in animations) {
+		var anim = animations[i];
+		var progress = (time - anim.start) / (anim.end - anim.start);
+		if(progress > 1) delete animations[i];
+		else anyToDraw = true;
+	}
+	if(!anyToDraw) return;
+	ctx.fillStyle = '#fff';
+	ctx.fillRect(0, 0, width, height);
+	for(var i in animations) {
+		var anim = animations[i];
+		var progress = (time - anim.start) / (anim.end - anim.start);
+		anim.drawable.draw(progress);
+	}
+}
+
+function poll() {
+	if(!receiveSocket) return;
+	var url = '/?p=';
+	try {
+		receiveSocket.open('GET', url, true);
+		receiveSocket.send(null);
+	} catch(e) {}
+}
+
+function inhale() {
+	if(!ellipse || inhaling) return;
+	inhaling = true;
+	var time = new Date().getTime();
+	breathStart = time;
+	var anim = animations[id];
+	var now = anim ? snapshot(anim, time) : earth;
+	var y = 1 - Math.max(0, now.cy) / height;
+	sendInhaleEvent(y, breath);
+	ellipse.start = now;
+	rise(ellipse, id, breath, time);
+}
+
+function snapshot(anim, time) {
+	var progress = (time - anim.start) / (anim.end - anim.start);
+	return interpolate(anim.drawable.start, anim.drawable.end, progress);
+}
+
+function sendInhaleEvent(y, b) {
+	if(!sendSocket) return;
+	var url = '/?id=' + id + '&i=' + y.toFixed(5) + '&b=' + b;
+	try {
+		sendSocket.open('GET', url, true);
+		sendSocket.send(null);
+	} catch(e) {}
+}
+
+function exhale(real) {
+	var time = new Date().getTime();
+	if(real) {
+		var interval = time - lastKeyUp;
+		lastKeyUp = time;
+		if(interval < 1000) {
+			repeat = Math.min(repeat, interval);
+			var timeout = Math.min(1000,
+				Math.max(repeat * 1.5, 50));
+			if(timeoutId) clearTimeout(timeoutId);
+			timeoutId = setTimeout('exhale(false)', timeout);
+			return;
+		}
+	}
+	if(!ellipse || !inhaling) return;
+	inhaling = false;
+	measureBreath(time);
+	var anim = animations[id];
+	var now = anim ? snapshot(anim, time) : sky;
+	var y = 1 - Math.max(0, now.cy) / height;
+	sendExhaleEvent(y, breath);
+	ellipse.start = now;
+	fall(ellipse, id, breath, time);
+}
+
+function measureBreath(time) {
+	var newBreath = time - breathStart;
+	if(newBreath > 1000 && newBreath < 10000) {
+		breath = Math.round(breath * 0.8 + newBreath * 0.2);
+	}
+}
+
+function sendExhaleEvent(y, b) {
+	if(!sendSocket) return;
+	var url = '/?id=' + id + '&e=' + y.toFixed(5) + '&b=' + b;
+	try {
+		sendSocket.open('GET', url, true);
+		sendSocket.send(null);
+	} catch(e) {}
+}
+</script>
+</head>
+<body onload='init()' onkeydown='inhale()' onkeyup='exhale(true)'>
+<div id='canvasDiv'>
+<canvas id='canvas'>Sorry, your browser can't display this page.</canvas>
+</div>
+<div id='console'></div>
+</body>
+</html>
